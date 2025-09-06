@@ -1,0 +1,10 @@
+[package]
+name = "dualsense"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.99"
+hidapi = "2.6.3"
+zerocopy = "0.8.26"
+zerocopy-derive = "0.8.26"
