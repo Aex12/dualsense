@@ -103,7 +103,7 @@ impl DualSense {
         Ok(Self::new(dev))
     }
 
-    fn read_report_with<F, R>(&self, f: F) -> HidResult<R>
+    fn read_report<F, R>(&self, f: F) -> HidResult<R>
     where
         F: FnOnce(&DualSenseInputReport) -> R,
     {
@@ -115,12 +115,31 @@ impl DualSense {
         let report = DualSenseInputReport::parse_report(&buf, size);
         Ok(f(report))
     }
+
+    fn poll_report<F>(&self, pollrate: usize, f: F) -> HidResult<()>
+    where
+        F: Fn(&DualSenseInputReport) -> (),
+    {
+        let mut buf = [0u8; DS_INPUT_REPORT_BT_SIZE];
+        loop {
+            let size = self.dev.read_timeout(&mut buf, 500)?;
+            if size == 0 {
+                return HidResult::Err(HidError::InvalidZeroSizeData);
+            }
+            let report = DualSenseInputReport::parse_report(&buf, size);
+            f(report);
+            if pollrate != 0 {
+                std::thread::sleep(std::time::Duration::from_millis(pollrate as u64));
+            }
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
     let hid = HidApi::new().unwrap();
     let ds = DualSense::open(Some(hid))?;
-    ds.read_report_with(|report| {
+
+    ds.poll_report(1000, |report| {
         let (capacity, charging) = report.battery();
         println!("Battery: {} (charging: {})", capacity, charging);
     })?;
