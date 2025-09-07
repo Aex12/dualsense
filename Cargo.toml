@@ -6,5 +6,8 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.99"
 hidapi = "2.6.3"
+image = "0.25.8"
+tao = "0.34.3"
+tray-icon = "0.21.1"
 zerocopy = "0.8.26"
 zerocopy-derive = "0.8.26"

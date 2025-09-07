@@ -1,17 +1,7 @@
 mod dualsense;
-
-use hidapi::HidApi;
-
-use crate::dualsense::DualSense;
+mod tray_icon;
 
 fn main() -> anyhow::Result<()> {
-    let hid = HidApi::new().unwrap();
-    let ds = DualSense::open(Some(hid))?;
-
-    ds.poll_report(1000, |report| {
-        let (capacity, charging) = report.battery();
-        println!("Battery: {} (charging: {})", capacity, charging);
-    })?;
-
+    tray_icon::run_tray_icon()?;
     Ok(())
 }

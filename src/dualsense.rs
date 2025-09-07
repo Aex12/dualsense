@@ -96,10 +96,21 @@ impl DualSense {
         Self { dev }
     }
 
-    pub fn open(hidapi: Option<HidApi>) -> HidResult<Self> {
-        let hidapi = hidapi.map_or_else(HidApi::new, Ok)?;
+    pub fn open_first() -> HidResult<Self> {
+        let hidapi = HidApi::new()?;
         let dev = hidapi.open(SONY_VID, DUAL_SENSE_PID)?;
         Ok(Self::new(dev))
+    }
+
+    pub fn open_all() -> HidResult<Vec<Self>> {
+        let hidapi = HidApi::new()?;
+        let devices = hidapi
+            .device_list()
+            .filter(|d| d.vendor_id() == SONY_VID && d.product_id() == DUAL_SENSE_PID)
+            .filter_map(|d| d.open_device(&hidapi).ok())
+            .map(|dev| Self::new(dev))
+            .collect();
+        Ok(devices)
     }
 
     pub fn read_report<F, R>(&self, f: F) -> HidResult<R>
