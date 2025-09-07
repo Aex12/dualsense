@@ -37,6 +37,11 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
     std::thread::spawn(move || {
         loop {
             if let Ok(ds) = DualSense::open_first() {
+                if let Err(_) = ds.enable_bluetooth_full_report() {
+                    let _ = proxy.send_event(UserEvent::DisconnectEvent);
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                    continue;
+                };
                 ds.poll_report(1000, |report| {
                     let (capacity, charging) = report.battery();
                     let _ = proxy.send_event(UserEvent::BatteryEvent(capacity, charging != 0));

@@ -11,6 +11,8 @@ const DS_INPUT_REPORT_USB_SIZE: usize = 64;
 const DS_INPUT_REPORT_BT: u8 = 0x31;
 const DS_INPUT_REPORT_BT_SIZE: usize = 78;
 
+const DS_FEATURE_REPORT_BT_FULL: [u8; 1] = [0x05];
+
 const DS_STATUS_BATTERY_CAPACITY: u8 = 0xF;
 const DS_STATUS_CHARGING: u8 = 0xF0;
 const DS_STATUS_CHARGING_SHIFT: u8 = 4;
@@ -111,6 +113,10 @@ impl DualSense {
             .map(|dev| Self::new(dev))
             .collect();
         Ok(devices)
+    }
+
+    pub fn enable_bluetooth_full_report(&self) -> HidResult<()> {
+        self.dev.send_feature_report(&DS_FEATURE_REPORT_BT_FULL)
     }
 
     pub fn read_report<F, R>(&self, f: F) -> HidResult<R>
