@@ -1,13 +1,22 @@
-use zerocopy::FromBytes;
+use static_assertions::const_assert_eq;
 use zerocopy::byteorder::{LittleEndian as LE, U16, U32};
-use zerocopy_derive::{FromBytes, Immutable, KnownLayout};
+use zerocopy::{FromBytes, Immutable, KnownLayout};
 
-use super::constants::{
-    DS_INPUT_REPORT_BT_SIZE, DS_INPUT_REPORT_USB_SIZE, DS_STATUS_BATTERY_CAPACITY,
-    DS_STATUS_CHARGING, DS_STATUS_CHARGING_SHIFT,
-};
+pub const SONY_VID: u16 = 0x054C;
+pub const DUALSENSE_PID: u16 = 0x0CE6;
 
-#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+pub const DS_INPUT_REPORT_USB: u8 = 0x01;
+pub const DS_INPUT_REPORT_USB_SIZE: usize = 64;
+pub const DS_INPUT_REPORT_BT: u8 = 0x31;
+pub const DS_INPUT_REPORT_BT_SIZE: usize = 78;
+
+pub const DS_FEATURE_REPORT_BT_FULL: [u8; 1] = [0x05];
+
+pub const DS_STATUS_BATTERY_CAPACITY: u8 = 0xF;
+pub const DS_STATUS_CHARGING: u8 = 0xF0;
+pub const DS_STATUS_CHARGING_SHIFT: u8 = 4;
+
+#[derive(FromBytes, KnownLayout, Immutable, PartialEq, Eq, Clone, Debug)]
 #[repr(C)]
 pub struct DualSenseTouchPoint {
     contact: u8,
@@ -29,7 +38,7 @@ impl DualSenseTouchPoint {
     }
 }
 
-#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[derive(FromBytes, KnownLayout, Immutable, PartialEq, Eq, Clone, Debug)]
 #[repr(C)]
 pub struct DualSenseInputReport {
     x: u8,
@@ -54,20 +63,17 @@ pub struct DualSenseInputReport {
     status: u8,
     reserved4: [u8; 10],
 }
-const DS_INPUT_REPORT_SIZE: usize = core::mem::size_of::<DualSenseInputReport>();
+pub const DS_INPUT_REPORT_SIZE: usize = core::mem::size_of::<DualSenseInputReport>();
 
 impl DualSenseInputReport {
-    pub fn parse_report<'a>(data: &'a [u8], size: usize) -> &'a Self {
-        let offset = match size {
-            DS_INPUT_REPORT_USB_SIZE => 1,
-            DS_INPUT_REPORT_BT_SIZE => 2,
-            _ => panic!("Unknown report format"),
+    pub fn parse<'a>(data: &'a [u8]) -> Option<&'a Self> {
+        let offset = match *data.first()? {
+            DS_INPUT_REPORT_USB => 1,
+            DS_INPUT_REPORT_BT => 2,
+            _ => return None,
         };
-        let bytes: &'a [u8] = data
-            .get(offset..offset + DS_INPUT_REPORT_SIZE)
-            .expect("Invalid report size");
-
-        Self::ref_from_bytes(bytes).unwrap()
+        let bytes: &'a [u8] = data.get(offset..offset + DS_INPUT_REPORT_SIZE)?;
+        Self::ref_from_bytes(bytes).ok()
     }
 
     pub fn battery(&self) -> (u8, u8) {
@@ -77,3 +83,33 @@ impl DualSenseInputReport {
         (capacity, charging)
     }
 }
+
+#[derive(FromBytes, KnownLayout, Immutable, PartialEq, Eq, Clone, Debug)]
+#[repr(C)]
+pub struct DualSenseInputReportUSB {
+    pub report_id: u8, // 0x01 (USB full report)
+    pub input_report: DualSenseInputReport,
+    /**
+     * This padding will always be zeros, as the USB report is 64 bytes,
+     * I'm keeping it the same size as the BT report
+     * as it makes the code simpler by reducing branching
+     */
+    pub padding: [u8; 14],
+}
+const_assert_eq!(
+    core::mem::size_of::<DualSenseInputReportUSB>(),
+    DS_INPUT_REPORT_BT_SIZE
+);
+
+#[derive(FromBytes, KnownLayout, Immutable, PartialEq, Eq, Clone, Debug)]
+#[repr(C)]
+pub struct DualSenseInputReportBT {
+    pub report_id: u8, // either 0x01 (BT non-full report) or 0x31 (BT full report)
+    pub padding: u8,
+    pub input_report: DualSenseInputReport,
+    pub padding2: [u8; 13],
+}
+const_assert_eq!(
+    core::mem::size_of::<DualSenseInputReportBT>(),
+    DS_INPUT_REPORT_BT_SIZE
+);

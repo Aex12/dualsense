@@ -8,7 +8,7 @@ use tray_icon::{
     menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
-use crate::dualsense::DualSense;
+use crate::dualsense::hid::DualSense;
 
 enum UserEvent {
     TrayIconEvent(tray_icon::TrayIconEvent),
@@ -42,9 +42,10 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
                     std::thread::sleep(std::time::Duration::from_millis(1000));
                     continue;
                 };
-                ds.poll_report(1000, |report| {
+                ds.poll_report(1000, &mut |report| {
                     let (capacity, charging) = report.battery();
                     let _ = proxy.send_event(UserEvent::BatteryEvent(capacity, charging != 0));
+                    return true;
                 })
                 .unwrap_or_else(|_e| {
                     let _ = proxy.send_event(UserEvent::DisconnectEvent);

@@ -1,5 +1,3 @@
-pub(self) mod constants;
-pub(self) mod hid;
-pub(self) mod proto;
-
-pub use hid::DualSense;
+pub mod async_hid;
+pub mod hid;
+pub mod proto;

@@ -1,6 +1,6 @@
-use super::{
-    constants::{DS_FEATURE_REPORT_BT_FULL, DS_INPUT_REPORT_BT_SIZE, DUAL_SENSE_PID, SONY_VID},
-    proto::DualSenseInputReport,
+use super::proto::{
+    DS_FEATURE_REPORT_BT_FULL, DS_INPUT_REPORT_BT_SIZE, DUALSENSE_PID, DualSenseInputReport,
+    SONY_VID,
 };
 use hidapi::{HidApi, HidError, HidResult};
 
@@ -16,7 +16,7 @@ impl DualSense {
 
     pub fn open_first() -> HidResult<Self> {
         let hidapi = HidApi::new()?;
-        let dev = hidapi.open(SONY_VID, DUAL_SENSE_PID)?;
+        let dev = hidapi.open(SONY_VID, DUALSENSE_PID)?;
         Ok(Self::new(dev))
     }
 
@@ -24,7 +24,7 @@ impl DualSense {
         let hidapi = HidApi::new()?;
         let devices = hidapi
             .device_list()
-            .filter(|d| d.vendor_id() == SONY_VID && d.product_id() == DUAL_SENSE_PID)
+            .filter(|d| d.vendor_id() == SONY_VID && d.product_id() == DUALSENSE_PID)
             .filter_map(|d| d.open_device(&hidapi).ok())
             .map(|dev| Self::new(dev))
             .collect();
@@ -44,13 +44,13 @@ impl DualSense {
         if size == 0 {
             return HidResult::Err(HidError::InvalidZeroSizeData);
         }
-        let report = DualSenseInputReport::parse_report(&buf, size);
+        let report = DualSenseInputReport::parse(&buf).unwrap();
         Ok(f(report))
     }
 
-    pub fn poll_report<F>(&self, pollrate: usize, f: F) -> HidResult<()>
+    pub fn poll_report<F>(&self, pollrate: usize, f: &mut F) -> HidResult<()>
     where
-        F: Fn(&DualSenseInputReport) -> (),
+        F: FnMut(&DualSenseInputReport) -> bool,
     {
         let mut buf = [0u8; DS_INPUT_REPORT_BT_SIZE];
         loop {
@@ -58,11 +58,35 @@ impl DualSense {
             if size == 0 {
                 return HidResult::Err(HidError::InvalidZeroSizeData);
             }
-            let report = DualSenseInputReport::parse_report(&buf, size);
-            f(report);
+            let report = DualSenseInputReport::parse(&buf).unwrap();
+            let keepgoing = f(report);
+            if keepgoing == false {
+                break;
+            }
             if pollrate != 0 {
                 std::thread::sleep(std::time::Duration::from_millis(pollrate as u64));
             }
         }
+        Ok(())
     }
+}
+
+pub fn main() -> anyhow::Result<()> {
+    let devices = DualSense::open_all()?;
+
+    let start = std::time::Instant::now();
+    let mut takes = 0;
+    devices[0].poll_report(0, &mut |_| {
+        takes += 1;
+        if (takes % 1000) == 0 {
+            let after = std::time::Instant::now();
+            let elapsed = after.duration_since(start);
+            let avg_duration = elapsed / takes;
+            println!("Avg duration: {:?} after {} takes", avg_duration, takes);
+            return false;
+        }
+        return true;
+    })?;
+
+    Ok(())
 }
