@@ -93,6 +93,9 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
             Event::UserEvent(UserEvent::TrayIconEvent(event)) => match event {
                 TrayIconEvent::Click { button_state, .. } => {
                     if button_state == MouseButtonState::Down {
+                        if let Some(_) = query_device_i {
+                            return;
+                        }
                         query_device_i = Some(MenuItem::new("Querying device info", false, None));
                         let _ = tray_menu.prepend(query_device_i.as_ref().unwrap());
                         let proxy = proxy.clone();
