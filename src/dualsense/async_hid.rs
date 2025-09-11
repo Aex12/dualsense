@@ -65,13 +65,19 @@ impl DualSense {
     }
 
     pub async fn open_device(device: Device) -> HidResult<Self> {
-        let (mut reader, writer) = device.open().await?;
+        let (mut reader, writer) = device
+            .open()
+            .or(async {
+                Timer::after(Duration::from_secs(1)).await;
+                Err(HidError::NotConnected)
+            })
+            .await?;
 
         let mut buf = [0u8; DS_INPUT_REPORT_BT_SIZE];
         let size = reader
             .read_input_report(&mut buf)
             .or(async {
-                Timer::after(Duration::from_secs(2)).await;
+                Timer::after(Duration::from_secs(1)).await;
                 Err(HidError::Disconnected)
             })
             .await?;

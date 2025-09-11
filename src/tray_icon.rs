@@ -1,5 +1,4 @@
-use smol::lock::Mutex;
-use std::sync::Arc;
+use smol::channel::bounded;
 
 use async_hid::{HidBackend, HidError};
 use futures_lite::StreamExt;
@@ -18,6 +17,7 @@ use crate::dualsense::async_hid::DualSense;
 enum UserEvent {
     TrayIconEvent(tray_icon::TrayIconEvent),
     MenuEvent(tray_icon::menu::MenuEvent),
+    DeviceInfo(Vec<String>),
 }
 
 pub fn run_tray_icon() -> anyhow::Result<()> {
@@ -37,6 +37,7 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
 
     let tray_menu = Menu::new();
 
+    let mut query_device_i: Option<MenuItem> = None;
     let quit_i = MenuItem::new("Quit", true, None);
     let _ = tray_menu.append_items(&[
         &PredefinedMenuItem::separator(),
@@ -52,13 +53,14 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
         &quit_i,
     ]);
 
-    let devices_i: Arc<Mutex<Vec<MenuItem>>> = Arc::new(Mutex::new(vec![]));
+    let mut device_info_items: Vec<MenuItem> = vec![];
 
     let mut tray_icon = None;
 
     let _menu_channel = MenuEvent::receiver();
     let _tray_channel = TrayIconEvent::receiver();
 
+    let proxy = event_loop.create_proxy();
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
@@ -91,8 +93,11 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
             Event::UserEvent(UserEvent::TrayIconEvent(event)) => match event {
                 TrayIconEvent::Click { button_state, .. } => {
                     if button_state == MouseButtonState::Down {
-                        let hid = HidBackend::default();
-                        let _ = smol::block_on(async {
+                        query_device_i = Some(MenuItem::new("Querying device info", false, None));
+                        let _ = tray_menu.prepend(query_device_i.as_ref().unwrap());
+                        let proxy = proxy.clone();
+                        smol::spawn(async move {
+                            let hid = HidBackend::default();
                             let tasks = DualSense::find_all(&hid)
                                 .await?
                                 .map(|d| {
@@ -113,14 +118,11 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
                                 .collect::<Vec<_>>()
                                 .await;
 
-                            let mut devices_i = devices_i.lock().await;
-
-                            for item in devices_i.iter() {
-                                let _ = tray_menu.remove(item);
-                            }
-
+                            let mut device_info: Vec<String> = Vec::new();
                             for (idx, task) in tasks {
-                                let (connection_type, capacity, charging) = task.await?;
+                                let Ok((connection_type, capacity, charging)) = task.await else {
+                                    continue;
+                                };
                                 let label = format!(
                                     "DualSense {} {}: {}% ({})",
                                     idx + 1,
@@ -128,13 +130,13 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
                                     capacity * 10,
                                     charging
                                 );
-                                let item = MenuItem::new(label, false, None);
-                                let _ = tray_menu.insert(&item, idx);
-                                devices_i.push(item);
+                                device_info.push(label);
                             }
+                            let _ = proxy.send_event(UserEvent::DeviceInfo(device_info));
 
                             Ok::<(), HidError>(())
-                        });
+                        })
+                        .detach();
                     }
                 }
                 _ => {}
@@ -144,6 +146,21 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
                 if event.id == quit_i.id() {
                     tray_icon.take();
                     *control_flow = ControlFlow::Exit;
+                }
+            }
+
+            Event::UserEvent(UserEvent::DeviceInfo(devices)) => {
+                if let Some(i) = query_device_i.take() {
+                    let _ = tray_menu.remove(&i);
+                }
+                for item in device_info_items.iter() {
+                    let _ = tray_menu.remove(item);
+                }
+                device_info_items.clear();
+                for label in devices.into_iter() {
+                    let item = MenuItem::new(label, false, None);
+                    let _ = tray_menu.prepend(&item);
+                    device_info_items.push(item);
                 }
             }
 
