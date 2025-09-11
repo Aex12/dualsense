@@ -160,6 +160,11 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
                     let _ = tray_menu.remove(item);
                 }
                 device_info_items.clear();
+                if devices.len() == 0 {
+                    let item = MenuItem::new("No DualSense device found", false, None);
+                    let _ = tray_menu.prepend(&item);
+                    device_info_items.push(item);
+                }
                 for label in devices.into_iter() {
                     let item = MenuItem::new(label, false, None);
                     let _ = tray_menu.prepend(&item);
