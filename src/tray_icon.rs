@@ -93,8 +93,11 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
             Event::UserEvent(UserEvent::TrayIconEvent(event)) => match event {
                 TrayIconEvent::Click { button_state, .. } => {
                     if button_state == MouseButtonState::Down {
-                        if let Some(_) = query_device_i {
+                        if query_device_i.is_some() {
                             return;
+                        }
+                        for item in device_info_items.iter() {
+                            let _ = tray_menu.remove(item);
                         }
                         query_device_i = Some(MenuItem::new("Querying device info", false, None));
                         let _ = tray_menu.prepend(query_device_i.as_ref().unwrap());
@@ -127,7 +130,7 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
                                     continue;
                                 };
                                 let label = format!(
-                                    "DualSense {} {}: {}% ({})",
+                                    "{}. DualSense {}: {}% ({})",
                                     idx + 1,
                                     connection_type,
                                     capacity * 10,
@@ -156,16 +159,13 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
                 if let Some(i) = query_device_i.take() {
                     let _ = tray_menu.remove(&i);
                 }
-                for item in device_info_items.iter() {
-                    let _ = tray_menu.remove(item);
-                }
                 device_info_items.clear();
                 if devices.len() == 0 {
                     let item = MenuItem::new("No DualSense device found", false, None);
                     let _ = tray_menu.prepend(&item);
                     device_info_items.push(item);
                 }
-                for label in devices.into_iter() {
+                for label in devices.into_iter().rev() {
                     let item = MenuItem::new(label, false, None);
                     let _ = tray_menu.prepend(&item);
                     device_info_items.push(item);
