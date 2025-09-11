@@ -37,6 +37,15 @@ impl DualSenseConnectionType {
     }
 }
 
+impl std::fmt::Display for DualSenseConnectionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::USB => write!(f, "USB"),
+            Self::BT => write!(f, "BT"),
+        }
+    }
+}
+
 pub struct DualSense {
     device: Device,
     reader: DeviceReader,
@@ -46,11 +55,12 @@ pub struct DualSense {
 }
 
 impl DualSense {
+    pub fn is(device: &Device) -> bool {
+        device.vendor_id == SONY_VID && device.product_id == DUALSENSE_PID
+    }
+
     pub async fn find_all<'a>(hid: &'a HidBackend) -> HidResult<impl Stream<Item = Device> + 'a> {
-        let stream = hid
-            .enumerate()
-            .await?
-            .filter(|d| d.vendor_id == SONY_VID && d.product_id == DUALSENSE_PID);
+        let stream = hid.enumerate().await?.filter(DualSense::is);
         Ok(stream)
     }
 
@@ -76,6 +86,10 @@ impl DualSense {
             connection_type,
             current_input_report: buf[0],
         })
+    }
+
+    pub fn connection_type(&self) -> DualSenseConnectionType {
+        self.connection_type
     }
 
     pub async fn read_input_report<'a>(&mut self) -> Option<DualSenseInputReport> {
@@ -110,25 +124,23 @@ impl DualSense {
     }
 }
 
+/*
 pub async fn main() -> anyhow::Result<()> {
     let hid = HidBackend::default();
+
+    hid.watch()?
+        .for_each(|event| {
+            println!("HID event: {:?}", event);
+        })
+        .await;
+
     let tasks = DualSense::find_all(&hid)
         .await?
         .map(|d| async move {
             let mut dualsense = DualSense::open_device(d).await?;
             println!("Opened DualSense device: {:?}", dualsense.connection_type);
-            let start = std::time::Instant::now();
-            let mut takes = 0;
-            while let Some(_report) = dualsense.read_input_report().await {
-                takes += 1;
-                if (takes % 1000) == 0 {
-                    let after = std::time::Instant::now();
-                    let elapsed = after.duration_since(start);
-                    let avg_duration = elapsed / takes;
-                    println!("Avg duration: {:?} after {} takes", avg_duration, takes);
-                    break;
-                }
-                //println!("Report: {:?}", report.battery());
+            while let Some(report) = dualsense.read_input_report().await {
+                println!("Report: {:?}", report.battery());
             }
 
             Ok::<(), HidError>(())
@@ -142,3 +154,4 @@ pub async fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+*/

@@ -48,7 +48,7 @@ impl DualSense {
         Ok(f(report))
     }
 
-    pub fn poll_report<F>(&self, pollrate: usize, f: &mut F) -> HidResult<()>
+    pub fn poll_report<F>(&self, pollrate: u64, f: &mut F) -> HidResult<()>
     where
         F: FnMut(&DualSenseInputReport) -> bool,
     {
@@ -64,29 +64,22 @@ impl DualSense {
                 break;
             }
             if pollrate != 0 {
-                std::thread::sleep(std::time::Duration::from_millis(pollrate as u64));
+                std::thread::sleep(std::time::Duration::from_millis(pollrate));
             }
         }
         Ok(())
     }
 }
 
+/*
 pub fn main() -> anyhow::Result<()> {
     let devices = DualSense::open_all()?;
 
-    let start = std::time::Instant::now();
-    let mut takes = 0;
-    devices[0].poll_report(0, &mut |_| {
-        takes += 1;
-        if (takes % 1000) == 0 {
-            let after = std::time::Instant::now();
-            let elapsed = after.duration_since(start);
-            let avg_duration = elapsed / takes;
-            println!("Avg duration: {:?} after {} takes", avg_duration, takes);
-            return false;
-        }
+    devices[0].poll_report(0, &mut |device| {
+        println!("{:?}", device.battery());
         return true;
     })?;
 
     Ok(())
 }
+ */

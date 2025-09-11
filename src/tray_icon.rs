@@ -1,20 +1,23 @@
+use smol::lock::Mutex;
+use std::sync::Arc;
+
+use async_hid::{HidBackend, HidError};
+use futures_lite::StreamExt;
 use image::imageops::FilterType;
 use tao::{
     event::Event,
     event_loop::{ControlFlow, EventLoopBuilder},
 };
 use tray_icon::{
-    TrayIconBuilder, TrayIconEvent,
+    MouseButtonState, TrayIconBuilder, TrayIconEvent,
     menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
-use crate::dualsense::hid::DualSense;
+use crate::dualsense::async_hid::DualSense;
 
 enum UserEvent {
     TrayIconEvent(tray_icon::TrayIconEvent),
     MenuEvent(tray_icon::menu::MenuEvent),
-    BatteryEvent(u8, bool),
-    DisconnectEvent,
 }
 
 pub fn run_tray_icon() -> anyhow::Result<()> {
@@ -32,41 +35,16 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
         let _ = proxy.send_event(UserEvent::MenuEvent(event));
     }));
 
-    // handle battery status updates
-    let proxy = event_loop.create_proxy();
-    std::thread::spawn(move || {
-        loop {
-            if let Ok(ds) = DualSense::open_first() {
-                if let Err(_) = ds.enable_bluetooth_full_report() {
-                    let _ = proxy.send_event(UserEvent::DisconnectEvent);
-                    std::thread::sleep(std::time::Duration::from_millis(1000));
-                    continue;
-                };
-                ds.poll_report(1000, &mut |report| {
-                    let (capacity, charging) = report.battery();
-                    let _ = proxy.send_event(UserEvent::BatteryEvent(capacity, charging != 0));
-                    return true;
-                })
-                .unwrap_or_else(|_e| {
-                    let _ = proxy.send_event(UserEvent::DisconnectEvent);
-                });
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-        }
-    });
-
     let tray_menu = Menu::new();
 
-    let device_i = MenuItem::new("Device", false, None);
     let quit_i = MenuItem::new("Quit", true, None);
     let _ = tray_menu.append_items(&[
-        &device_i,
         &PredefinedMenuItem::separator(),
         &PredefinedMenuItem::about(
             None,
             Some(AboutMetadata {
-                name: Some("tao".to_string()),
-                copyright: Some("Copyright tao".to_string()),
+                name: Some("Dualsense".to_string()),
+                copyright: Some("Dualsense".to_string()),
                 ..Default::default()
             }),
         ),
@@ -74,8 +52,9 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
         &quit_i,
     ]);
 
+    let devices_i: Arc<Mutex<Vec<MenuItem>>> = Arc::new(Mutex::new(vec![]));
+
     let mut tray_icon = None;
-    let mut was_charging = false;
 
     let _menu_channel = MenuEvent::receiver();
     let _tray_channel = TrayIconEvent::receiver();
@@ -92,7 +71,7 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
                 tray_icon = Some(
                     TrayIconBuilder::new()
                         .with_menu(Box::new(tray_menu.clone()))
-                        .with_tooltip("DualSense - Disconnected")
+                        .with_tooltip("DualSense")
                         .with_icon(icon)
                         .build()
                         .unwrap(),
@@ -109,46 +88,63 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
                 }
             }
 
-            Event::UserEvent(UserEvent::TrayIconEvent(_event)) => {
-                // println!("{event:?}");
-            }
+            Event::UserEvent(UserEvent::TrayIconEvent(event)) => match event {
+                TrayIconEvent::Click { button_state, .. } => {
+                    if button_state == MouseButtonState::Down {
+                        let hid = HidBackend::default();
+                        let _ = smol::block_on(async {
+                            let tasks = DualSense::find_all(&hid)
+                                .await?
+                                .map(|d| {
+                                    smol::spawn(async {
+                                        let mut ds = DualSense::open_device(d).await?;
+                                        let report = ds.read_input_report().await.ok_or(
+                                            HidError::message("Error reading input report"),
+                                        )?;
+                                        let (capacity, charging) = report.battery();
+                                        Ok::<_, HidError>((
+                                            ds.connection_type(),
+                                            capacity,
+                                            charging,
+                                        ))
+                                    })
+                                })
+                                .enumerate()
+                                .collect::<Vec<_>>()
+                                .await;
+
+                            let mut devices_i = devices_i.lock().await;
+
+                            for item in devices_i.iter() {
+                                let _ = tray_menu.remove(item);
+                            }
+
+                            for (idx, task) in tasks {
+                                let (connection_type, capacity, charging) = task.await?;
+                                let label = format!(
+                                    "DualSense {} {}: {}% ({})",
+                                    idx + 1,
+                                    connection_type,
+                                    capacity * 10,
+                                    charging
+                                );
+                                let item = MenuItem::new(label, false, None);
+                                let _ = tray_menu.insert(&item, idx);
+                                devices_i.push(item);
+                            }
+
+                            Ok::<(), HidError>(())
+                        });
+                    }
+                }
+                _ => {}
+            },
 
             Event::UserEvent(UserEvent::MenuEvent(event)) => {
-                // println!("{event:?}");
-
                 if event.id == quit_i.id() {
                     tray_icon.take();
                     *control_flow = ControlFlow::Exit;
                 }
-            }
-
-            Event::UserEvent(UserEvent::BatteryEvent(capacity, charging)) => {
-                let device_str = format!(
-                    "Device 1 - {}% {}",
-                    capacity * 10,
-                    if charging { "(charging)" } else { "" }
-                );
-                tray_icon.as_mut().map(|tray| {
-                    let _ = tray.set_tooltip(Some(&format!("DualSense\n\n{}", device_str)));
-                });
-                device_i.set_text(&device_str);
-                if charging != was_charging {
-                    was_charging = charging;
-                    let icon = if charging {
-                        load_icon(&[0, 255, 0, 255])
-                    } else {
-                        load_icon(&[0, 0, 0, 255])
-                    };
-                    tray_icon.as_mut().map(|tray| {
-                        tray.set_icon(Some(icon)).unwrap();
-                    });
-                }
-            }
-
-            Event::UserEvent(UserEvent::DisconnectEvent) => {
-                tray_icon.as_mut().map(|tray| {
-                    let _ = tray.set_tooltip(Some(&format!("DualSense - Disconnected")));
-                });
             }
 
             _ => {}
