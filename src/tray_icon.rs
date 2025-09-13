@@ -1,7 +1,6 @@
-use smol::channel::bounded;
+use std::{collections::HashMap, sync::Arc};
 
-use async_hid::{HidBackend, HidError};
-use futures_lite::StreamExt;
+use async_hid::DeviceId;
 use image::imageops::FilterType;
 use tao::{
     event::Event,
@@ -12,12 +11,12 @@ use tray_icon::{
     menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
-use crate::dualsense::async_hid::DualSense;
+use crate::device_manager::{DeviceManager, DeviceManagerEvent};
 
 enum UserEvent {
     TrayIconEvent(tray_icon::TrayIconEvent),
     MenuEvent(tray_icon::menu::MenuEvent),
-    DeviceInfo(Vec<String>),
+    Device(DeviceManagerEvent),
 }
 
 pub fn run_tray_icon() -> anyhow::Result<()> {
@@ -35,9 +34,23 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
         let _ = proxy.send_event(UserEvent::MenuEvent(event));
     }));
 
+    let mut device_manager = DeviceManager::new();
+    let proxy = event_loop.create_proxy();
+    device_manager.set_event_handler(move |event| {
+        println!("{:?}", event);
+        let _ = proxy.send_event(UserEvent::Device(event));
+    });
+    let device_manager = Arc::new(device_manager);
+    let _dm_task = {
+        let device_manager = device_manager.clone();
+        smol::spawn(async move {
+            let _ = device_manager.open_all_devices().await;
+            let _ = device_manager.watch_pnp().await;
+        })
+    };
+
     let tray_menu = Menu::new();
 
-    let mut query_device_i: Option<MenuItem> = None;
     let quit_i = MenuItem::new("Quit", true, None);
     let _ = tray_menu.append_items(&[
         &PredefinedMenuItem::separator(),
@@ -53,14 +66,15 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
         &quit_i,
     ]);
 
-    let mut device_info_items: Vec<MenuItem> = vec![];
+    let mut device_info: HashMap<DeviceId, (String, (u8, bool))> = HashMap::new();
+    let mut device_info_i: Vec<MenuItem> = Vec::new();
+    let mut redraw_device_info = false;
 
     let mut tray_icon = None;
 
     let _menu_channel = MenuEvent::receiver();
     let _tray_channel = TrayIconEvent::receiver();
 
-    let proxy = event_loop.create_proxy();
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
@@ -91,59 +105,11 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
             }
 
             Event::UserEvent(UserEvent::TrayIconEvent(event)) => match event {
-                TrayIconEvent::Click { button_state, .. } => {
-                    if button_state == MouseButtonState::Down {
-                        if query_device_i.is_some() {
-                            return;
-                        }
-                        for item in device_info_items.iter() {
-                            let _ = tray_menu.remove(item);
-                        }
-                        query_device_i = Some(MenuItem::new("Querying device info", false, None));
-                        let _ = tray_menu.prepend(query_device_i.as_ref().unwrap());
-                        let proxy = proxy.clone();
-                        smol::spawn(async move {
-                            let hid = HidBackend::default();
-                            let tasks = DualSense::find_all(&hid)
-                                .await?
-                                .map(|d| {
-                                    smol::spawn(async {
-                                        let mut ds = DualSense::open_device(d).await?;
-                                        let report = ds.read_input_report().await.ok_or(
-                                            HidError::message("Error reading input report"),
-                                        )?;
-                                        let (capacity, charging) = report.battery();
-                                        Ok::<_, HidError>((
-                                            ds.connection_type(),
-                                            capacity,
-                                            charging,
-                                        ))
-                                    })
-                                })
-                                .enumerate()
-                                .collect::<Vec<_>>()
-                                .await;
-
-                            let mut device_info: Vec<String> = Vec::new();
-                            for (idx, task) in tasks {
-                                let Ok((connection_type, capacity, charging)) = task.await else {
-                                    continue;
-                                };
-                                let label = format!(
-                                    "{}. DualSense {}: {}% ({})",
-                                    idx + 1,
-                                    connection_type,
-                                    capacity * 10,
-                                    charging
-                                );
-                                device_info.push(label);
-                            }
-                            let _ = proxy.send_event(UserEvent::DeviceInfo(device_info));
-
-                            Ok::<(), HidError>(())
-                        })
-                        .detach();
-                    }
+                TrayIconEvent::Click { button_state, .. }
+                    if button_state == MouseButtonState::Down =>
+                {
+                    let device_manager = device_manager.clone();
+                    smol::spawn(async move { device_manager.update_status().await }).detach();
                 }
                 _ => {}
             },
@@ -155,20 +121,48 @@ pub fn run_tray_icon() -> anyhow::Result<()> {
                 }
             }
 
-            Event::UserEvent(UserEvent::DeviceInfo(devices)) => {
-                if let Some(i) = query_device_i.take() {
-                    let _ = tray_menu.remove(&i);
+            Event::UserEvent(UserEvent::Device(event)) => match event {
+                DeviceManagerEvent::Connected(device_id, name) => {
+                    device_info.insert(device_id, (name, (0, false)));
+                    redraw_device_info = true;
                 }
-                device_info_items.clear();
-                if devices.len() == 0 {
-                    let item = MenuItem::new("No DualSense device found", false, None);
-                    let _ = tray_menu.prepend(&item);
-                    device_info_items.push(item);
+                DeviceManagerEvent::Disconnected(device_id) => {
+                    device_info.remove(&device_id);
+                    redraw_device_info = true;
                 }
-                for label in devices.into_iter().rev() {
-                    let item = MenuItem::new(label, false, None);
-                    let _ = tray_menu.prepend(&item);
-                    device_info_items.push(item);
+                DeviceManagerEvent::BatteryUpdate(device_id, status_update) => {
+                    let Some((_, status)) = device_info.get_mut(&device_id) else {
+                        return;
+                    };
+                    if status != &status_update {
+                        *status = status_update;
+                        redraw_device_info = true;
+                    }
+                }
+            },
+
+            Event::MainEventsCleared => {
+                if redraw_device_info {
+                    println!("Redrawing device info");
+                    redraw_device_info = false;
+
+                    for i in device_info_i.drain(..) {
+                        let _ = tray_menu.remove(&i);
+                    }
+
+                    for (i, info) in device_info.values().enumerate() {
+                        let label = format!("{}. {}", i + 1, info.0);
+                        let status = if &info.1.0 == &0 {
+                            "Unknown".to_string()
+                        } else if info.1.1 {
+                            format!("{}%, charging", info.1.0)
+                        } else {
+                            format!("{}%", info.1.0)
+                        };
+                        let item = MenuItem::new(&format!("{label} ({status})"), false, None);
+                        let _ = tray_menu.insert(&item, i);
+                        device_info_i.push(item);
+                    }
                 }
             }
 

@@ -1,18 +1,19 @@
 use std::time::Duration;
 
 use async_hid::{
-    AsyncHidRead, Device, DeviceReader, DeviceWriter, HidBackend, HidError, HidResult,
+    AsyncHidRead, Device, DeviceId, DeviceReader, DeviceWriter, HidBackend, HidError, HidResult,
 };
 use async_io::Timer;
 use futures_lite::{FutureExt, Stream, StreamExt};
 use zerocopy::transmute;
 
-use crate::dualsense::proto::{DS_INPUT_REPORT_SIZE, DUALSENSE_PID};
-
 use super::proto::{
-    DS_INPUT_REPORT_BT_SIZE, DS_INPUT_REPORT_USB_SIZE, DualSenseInputReport,
+    DS_INPUT_REPORT_BT_SIZE, DS_INPUT_REPORT_USB_SIZE, DUALSENSE_PID, DualSenseInputReport,
     DualSenseInputReportBT, DualSenseInputReportUSB, SONY_VID,
 };
+
+const OPEN_TIMEOUT: u64 = 500;
+const READ_TIMEOUT: u64 = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DualSenseConnectionType {
@@ -48,10 +49,7 @@ impl std::fmt::Display for DualSenseConnectionType {
 
 pub struct DualSense {
     device: Device,
-    reader: DeviceReader,
-    writer: DeviceWriter,
     connection_type: DualSenseConnectionType,
-    current_input_report: u8,
 }
 
 impl DualSense {
@@ -59,16 +57,25 @@ impl DualSense {
         device.vendor_id == SONY_VID && device.product_id == DUALSENSE_PID
     }
 
-    pub async fn find_all<'a>(hid: &'a HidBackend) -> HidResult<impl Stream<Item = Device> + 'a> {
+    pub async fn enumerate<'a>(hid: &'a HidBackend) -> HidResult<impl Stream<Item = Device> + 'a> {
         let stream = hid.enumerate().await?.filter(DualSense::is);
         Ok(stream)
     }
 
+    pub async fn open_device_id(hid: &HidBackend, device_id: &DeviceId) -> HidResult<Self> {
+        let devices = hid.query_devices(device_id).await?;
+        let device = devices
+            .into_iter()
+            .find(DualSense::is)
+            .ok_or(HidError::NotConnected)?;
+        Self::open_device(device).await
+    }
+
     pub async fn open_device(device: Device) -> HidResult<Self> {
-        let (mut reader, writer) = device
-            .open()
+        let mut reader = device
+            .open_readable()
             .or(async {
-                Timer::after(Duration::from_secs(1)).await;
+                Timer::after(Duration::from_millis(OPEN_TIMEOUT)).await;
                 Err(HidError::NotConnected)
             })
             .await?;
@@ -77,7 +84,7 @@ impl DualSense {
         let size = reader
             .read_input_report(&mut buf)
             .or(async {
-                Timer::after(Duration::from_secs(1)).await;
+                Timer::after(Duration::from_millis(READ_TIMEOUT)).await;
                 Err(HidError::Disconnected)
             })
             .await?;
@@ -87,36 +94,67 @@ impl DualSense {
 
         Ok(Self {
             device,
-            reader,
-            writer,
             connection_type,
-            current_input_report: buf[0],
         })
+    }
+
+    pub async fn connect(&self) -> HidResult<DualSenseConnection> {
+        let (reader, writer) = self
+            .device
+            .open()
+            .or(async {
+                Timer::after(Duration::from_millis(OPEN_TIMEOUT)).await;
+                Err(HidError::NotConnected)
+            })
+            .await?;
+
+        Ok(DualSenseConnection::new(reader, writer))
+    }
+
+    pub fn device_id(&self) -> &DeviceId {
+        &self.device.id
+    }
+
+    pub fn name(&self) -> String {
+        self.device.name.clone()
     }
 
     pub fn connection_type(&self) -> DualSenseConnectionType {
         self.connection_type
     }
+}
 
-    pub async fn read_input_report<'a>(&mut self) -> Option<DualSenseInputReport> {
+pub struct DualSenseConnection {
+    reader: DeviceReader,
+    writer: DeviceWriter,
+}
+
+impl DualSenseConnection {
+    fn new(reader: DeviceReader, writer: DeviceWriter) -> Self {
+        Self { reader, writer }
+    }
+
+    pub async fn read_input_report<'a>(
+        &mut self,
+    ) -> HidResult<(DualSenseInputReport, DualSenseConnectionType)> {
         let mut buf = [0u8; DS_INPUT_REPORT_BT_SIZE];
-        let read = self.reader.read_input_report(&mut buf).or(async {
-            Timer::after(Duration::from_secs(2)).await;
-            Err(HidError::Disconnected)
-        });
+        let size = self
+            .reader
+            .read_input_report(&mut buf)
+            .or(async {
+                Timer::after(Duration::from_millis(READ_TIMEOUT)).await;
+                Err(HidError::Disconnected)
+            })
+            .await?;
 
-        let Ok(size) = read.await else {
-            return None;
-        };
         // device disconnected
         if size == 0 {
-            return None;
+            return Err(HidError::Disconnected);
         }
-        // connection type changed
-        if size != self.connection_type.report_size() {
-            self.connection_type = DualSenseConnectionType::from_report_size(size)?;
-        }
-        let input_report: DualSenseInputReport = match self.connection_type {
+        let connection_type = DualSenseConnectionType::from_report_size(size).ok_or_else(|| {
+            HidError::message(format!("Unknown report size: {size}, buf: {buf:?}"))
+        })?;
+        let input_report: DualSenseInputReport = match connection_type {
             DualSenseConnectionType::USB => {
                 let report: DualSenseInputReportUSB = transmute!(buf);
                 report.input_report
@@ -126,7 +164,7 @@ impl DualSense {
                 report.input_report
             }
         };
-        Some(input_report)
+        Ok((input_report, connection_type))
     }
 }
 

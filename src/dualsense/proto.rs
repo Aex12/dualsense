@@ -76,11 +76,11 @@ impl DualSenseInputReport {
         Self::ref_from_bytes(bytes).ok()
     }
 
-    pub fn battery(&self) -> (u8, u8) {
+    pub fn battery(&self) -> (u8, bool) {
         let s = self.status;
         let capacity = s & DS_STATUS_BATTERY_CAPACITY;
         let charging = (s & DS_STATUS_CHARGING) >> DS_STATUS_CHARGING_SHIFT;
-        (capacity, charging)
+        (capacity * 10, charging == 1)
     }
 }
 
