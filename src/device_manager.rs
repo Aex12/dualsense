@@ -107,20 +107,27 @@ impl DeviceManager {
             return;
         }
         let event_handler = self.event_handler.as_ref().unwrap().clone();
-        let _ = smol::spawn(async move {
-            let mut ds_conn = device.connect().await?;
+        let result = smol::spawn({
+            let device_id = device_id.clone();
+            async move {
+                let mut ds_conn = device.connect().await?;
 
-            let report = ds_conn.read_input_report().await?;
-            let (capacity, charging) = report.battery();
+                let report = ds_conn.read_input_report().await?;
+                let (capacity, charging) = report.battery();
 
-            event_handler(DeviceManagerEvent::BatteryUpdate(
-                device_id,
-                (capacity, charging),
-            ));
+                event_handler(DeviceManagerEvent::BatteryUpdate(
+                    device_id,
+                    (capacity, charging),
+                ));
 
-            Ok::<(), HidError>(())
+                Ok::<(), HidError>(())
+            }
         })
         .await;
+
+        if let Err(HidError::Disconnected | HidError::NotConnected) = result {
+            self.close_device(&device_id).await;
+        }
     }
 
     pub async fn update_status(&self) -> () {
