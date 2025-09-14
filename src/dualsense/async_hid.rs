@@ -1,11 +1,11 @@
 use std::time::Duration;
 
-use async_hid::{
-    AsyncHidRead, Device, DeviceId, DeviceReader, DeviceWriter, HidBackend, HidError, HidResult,
-};
+use async_hid::{AsyncHidRead, Device, DeviceId, DeviceReader, HidBackend, HidError, HidResult};
 use async_io::Timer;
 use futures_lite::{FutureExt, Stream, StreamExt};
 use zerocopy::transmute;
+
+use crate::dualsense::proto::DS_FEATURE_REPORT_BT_FULL;
 
 use super::proto::{
     DS_INPUT_REPORT_BT_SIZE, DS_INPUT_REPORT_USB_SIZE, DUALSENSE_PID, DualSenseInputReport,
@@ -13,7 +13,8 @@ use super::proto::{
 };
 
 const OPEN_TIMEOUT: u64 = 500;
-const READ_TIMEOUT: u64 = 500;
+const READ_TIMEOUT: u64 = 200;
+const WRITE_TIMEOUT: u64 = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DualSenseConnectionType {
@@ -80,6 +81,11 @@ impl DualSense {
             })
             .await?;
 
+        // Enable full report over Bluetooth
+        let mut buf = [0u8; 41];
+        buf[0] = DS_FEATURE_REPORT_BT_FULL;
+        let _ = device.read_feature_report(&mut buf).await?;
+
         let mut buf = [0u8; DS_INPUT_REPORT_BT_SIZE];
         let size = reader
             .read_input_report(&mut buf)
@@ -99,16 +105,16 @@ impl DualSense {
     }
 
     pub async fn connect(&self) -> HidResult<DualSenseConnection> {
-        let (reader, writer) = self
+        let reader = self
             .device
-            .open()
+            .open_readable()
             .or(async {
                 Timer::after(Duration::from_millis(OPEN_TIMEOUT)).await;
                 Err(HidError::NotConnected)
             })
             .await?;
 
-        Ok(DualSenseConnection::new(reader, writer))
+        Ok(DualSenseConnection::new(reader, self.connection_type))
     }
 
     pub fn device_id(&self) -> &DeviceId {
@@ -126,17 +132,18 @@ impl DualSense {
 
 pub struct DualSenseConnection {
     reader: DeviceReader,
-    writer: DeviceWriter,
+    connection_type: DualSenseConnectionType,
 }
 
 impl DualSenseConnection {
-    fn new(reader: DeviceReader, writer: DeviceWriter) -> Self {
-        Self { reader, writer }
+    fn new(reader: DeviceReader, connection_type: DualSenseConnectionType) -> Self {
+        Self {
+            reader,
+            connection_type,
+        }
     }
 
-    pub async fn read_input_report<'a>(
-        &mut self,
-    ) -> HidResult<(DualSenseInputReport, DualSenseConnectionType)> {
+    pub async fn read_input_report(&mut self) -> HidResult<DualSenseInputReport> {
         let mut buf = [0u8; DS_INPUT_REPORT_BT_SIZE];
         let size = self
             .reader
@@ -151,10 +158,8 @@ impl DualSenseConnection {
         if size == 0 {
             return Err(HidError::Disconnected);
         }
-        let connection_type = DualSenseConnectionType::from_report_size(size).ok_or_else(|| {
-            HidError::message(format!("Unknown report size: {size}, buf: {buf:?}"))
-        })?;
-        let input_report: DualSenseInputReport = match connection_type {
+
+        let input_report: DualSenseInputReport = match self.connection_type {
             DualSenseConnectionType::USB => {
                 let report: DualSenseInputReportUSB = transmute!(buf);
                 report.input_report
@@ -164,38 +169,6 @@ impl DualSenseConnection {
                 report.input_report
             }
         };
-        Ok((input_report, connection_type))
+        Ok(input_report)
     }
 }
-
-/*
-pub async fn main() -> anyhow::Result<()> {
-    let hid = HidBackend::default();
-
-    hid.watch()?
-        .for_each(|event| {
-            println!("HID event: {:?}", event);
-        })
-        .await;
-
-    let tasks = DualSense::find_all(&hid)
-        .await?
-        .map(|d| async move {
-            let mut dualsense = DualSense::open_device(d).await?;
-            println!("Opened DualSense device: {:?}", dualsense.connection_type);
-            while let Some(report) = dualsense.read_input_report().await {
-                println!("Report: {:?}", report.battery());
-            }
-
-            Ok::<(), HidError>(())
-        })
-        .collect::<Vec<_>>()
-        .await;
-
-    for task in tasks {
-        let _ = task.await;
-    }
-
-    Ok(())
-}
-*/

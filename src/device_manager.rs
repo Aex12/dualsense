@@ -110,7 +110,7 @@ impl DeviceManager {
         let _ = smol::spawn(async move {
             let mut ds_conn = device.connect().await?;
 
-            let (report, _conn_type) = ds_conn.read_input_report().await?;
+            let report = ds_conn.read_input_report().await?;
             let (capacity, charging) = report.battery();
 
             event_handler(DeviceManagerEvent::BatteryUpdate(

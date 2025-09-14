@@ -10,7 +10,7 @@ pub const DS_INPUT_REPORT_USB_SIZE: usize = 64;
 pub const DS_INPUT_REPORT_BT: u8 = 0x31;
 pub const DS_INPUT_REPORT_BT_SIZE: usize = 78;
 
-pub const DS_FEATURE_REPORT_BT_FULL: [u8; 1] = [0x05];
+pub const DS_FEATURE_REPORT_BT_FULL: u8 = 0x05;
 
 pub const DS_STATUS_BATTERY_CAPACITY: u8 = 0xF;
 pub const DS_STATUS_CHARGING: u8 = 0xF0;

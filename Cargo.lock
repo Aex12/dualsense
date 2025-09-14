@@ -86,10 +86,8 @@ dependencies = [
 [[package]]
 name = "async-hid"
 version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aab637ea12169f6c473eaed9fe56843490146e3d431dbe408ca86d92edf79c2e"
+source = "git+https://github.com/Aex12/async-hid.git?branch=feat%2Fread-feature-report#7b8a54ae5fa835ca5b39aba678e8ec650729ec94"
 dependencies = [
- "async-channel",
  "async-io",
  "atomic-waker",
  "block2",
@@ -100,10 +98,8 @@ dependencies = [
  "nix",
  "objc2-core-foundation",
  "objc2-io-kit",
- "once_cell",
  "static_assertions",
  "windows",
- "windows-future",
 ]
 
 [[package]]
