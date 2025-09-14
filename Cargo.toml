@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.99"
-async-hid = "0.4.4"
+async-hid = { version = "0.4.4", features = ["async-io", "winrt"] }
 futures-lite = "2.6.1"
 image = "0.25.8"
 smol = "2.0.2"
