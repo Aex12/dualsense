@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.99"
-async-hid = { git = "https://github.com/Aex12/async-hid.git", branch = "feat/read-feature-report" }
 futures-lite = "2.6.1"
 image = "0.25.8"
 smol = "2.0.2"
@@ -14,3 +13,11 @@ tray-icon = "0.21.1"
 zerocopy = { version = "0.8.26", features = ["derive", "std"] }
 static_assertions = "1.1.0"
 async-io = "2.5.0"
+
+[target."cfg(target_os = \"windows\")".dependencies]
+async-hid = { git = "https://github.com/Aex12/async-hid.git", branch = "feat/read-feature-report" }
+
+[target."cfg(target_os = \"linux\")".dependencies]
+async-hid = { git = "https://github.com/Aex12/async-hid.git", branch = "feat/read-feature-report", default-features = false, features = [
+    "async-io",
+] }

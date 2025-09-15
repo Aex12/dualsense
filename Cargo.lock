@@ -86,7 +86,7 @@ dependencies = [
 [[package]]
 name = "async-hid"
 version = "0.4.4"
-source = "git+https://github.com/Aex12/async-hid.git?branch=feat%2Fread-feature-report#7b8a54ae5fa835ca5b39aba678e8ec650729ec94"
+source = "git+https://github.com/Aex12/async-hid.git?branch=feat%2Fread-feature-report#69d1f240d9bd2d0525954b44412bef5dd71649e2"
 dependencies = [
  "async-io",
  "atomic-waker",
