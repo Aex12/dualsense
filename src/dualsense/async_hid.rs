@@ -81,11 +81,6 @@ impl DualSense {
             })
             .await?;
 
-        // Enable full report over Bluetooth
-        let mut buf = [0u8; 41];
-        buf[0] = DS_FEATURE_REPORT_BT_FULL;
-        let _ = device.read_feature_report(&mut buf).await?;
-
         let mut buf = [0u8; DS_INPUT_REPORT_BT_SIZE];
         let size = reader
             .read_input_report(&mut buf)
@@ -97,6 +92,13 @@ impl DualSense {
 
         let connection_type = DualSenseConnectionType::from_report_size(size)
             .ok_or_else(|| HidError::message("Unknown report size"))?;
+
+        // Enable full report over Bluetooth
+        if connection_type == DualSenseConnectionType::BT {
+            let mut buf = [0u8; 41];
+            buf[0] = DS_FEATURE_REPORT_BT_FULL;
+            let _ = device.read_feature_report(&mut buf).await;
+        }
 
         Ok(Self {
             device,
