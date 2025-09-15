@@ -122,7 +122,7 @@ impl DualSense {
     }
 
     pub fn name(&self) -> String {
-        self.device.name.clone()
+        format!("DualSense {}", self.connection_type)
     }
 
     pub fn connection_type(&self) -> DualSenseConnectionType {
