@@ -174,3 +174,84 @@ impl DualSenseConnection {
         Ok(input_report)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use macro_rules_attribute::apply;
+    use smol_macros::{Executor, LocalExecutor, test};
+
+    use super::*;
+    use async_hid::HidBackend;
+
+    #[apply(test!)]
+    async fn test_open() {
+        let hid = HidBackend::default();
+        let mut stream = DualSense::enumerate(&hid).await.unwrap();
+        if let Some(device) = stream.next().await {
+            let ds = DualSense::open_device(device).await.unwrap();
+            println!("Opened device: {:?}", ds.device_id());
+            let mut connection = ds.connect().await.unwrap();
+            for _ in 0..5 {
+                let report = connection.read_input_report().await.unwrap();
+            }
+        } else {
+            println!("No DualSense device found");
+        }
+    }
+
+    #[apply(test!)]
+    async fn concurrent_read_input_and_feature(ex: &LocalExecutor<'_>) {
+        let hid = HidBackend::default();
+        let mut stream = DualSense::enumerate(&hid).await.unwrap();
+        if let Some(device) = stream.next().await {
+            let ds = DualSense::open_device(device).await.unwrap();
+            println!("Opened device: {:?}", ds.device_id());
+            let mut connection = ds.connect().await.unwrap();
+            let first_input_report_battery =
+                connection.read_input_report().await.unwrap().battery();
+            let first_feature_report = {
+                let mut buf = [0u8; 128];
+                buf[0] = DS_FEATURE_REPORT_BT_FULL;
+                let size = ds.device.read_feature_report(&mut buf).await.unwrap();
+                assert!(size == 41);
+                buf[..size].to_vec()
+            };
+
+            // reading input report and feature report concurrently should not interfere with each other
+
+            let start = std::time::Instant::now();
+
+            let read_task = ex.spawn(async move {
+                let start = std::time::Instant::now();
+                for _ in 0..250 {
+                    let report = connection.read_input_report().await.unwrap();
+                    let battery = report.battery();
+                    assert_eq!(battery, first_input_report_battery);
+                }
+                let elapsed = start.elapsed();
+                println!("read_task took: {:?}", elapsed);
+            });
+
+            let feature_task = ex.spawn(async move {
+                let start = std::time::Instant::now();
+                for _ in 0..250 {
+                    let mut buf = [0u8; 128];
+                    buf[0] = DS_FEATURE_REPORT_BT_FULL;
+                    let size = ds.device.read_feature_report(&mut buf).await.unwrap();
+                    let report = buf[..size].to_vec();
+                    assert_eq!(report, first_feature_report);
+                }
+                let elapsed = start.elapsed();
+                println!("feature_task took: {:?}", elapsed);
+            });
+
+            read_task.await;
+            feature_task.await;
+
+            let elapsed = start.elapsed();
+            println!("Combined tasks took: {:?}", elapsed);
+        } else {
+            panic!("No DualSense device found");
+        }
+    }
+}

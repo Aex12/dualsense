@@ -21,3 +21,7 @@ async-hid = { git = "https://github.com/Aex12/async-hid.git", branch = "feat/rea
 async-hid = { git = "https://github.com/Aex12/async-hid.git", branch = "feat/read-feature-report", default-features = false, features = [
     "async-io",
 ] }
+
+[dev-dependencies]
+smol-macros = "0.1.1"
+macro_rules_attribute = "0.2.2"
